@@ -7,3 +7,17 @@ authors = ["Berkus Decker <berkus+cargo@metta.systems>"]
 edition = "2021"
 
 [dependencies]
+chrono = "0.4"
+log = "0.4"
+fern = { version = "0.6", features = ["colored"] }
+dotenv = "0.15"
+futures = "0.3"
+tokio = { version = "1.10", features = ["rt-multi-thread", "macros"] }
+teloxide = { version = "0.5", features = ["macros", "auto-send"] }
+anyhow = "1.0"
+#serde = "1.0"
+#derive_more = "0.99"
+#frunk = "0.4"
+#frunk_core = "0.4"
+actix = "0.12.0"
+tokio-stream = "0.1"
