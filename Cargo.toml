@@ -1,0 +1,7 @@
+[package]
+name = "antispambot"
+version = "0.1.0"
+authors = ["Berkus Decker <berkus+cargo@metta.systems>"]
+edition = "2018"
+
+[dependencies]
