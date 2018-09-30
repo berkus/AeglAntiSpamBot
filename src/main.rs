@@ -1,56 +1,72 @@
-#[macro_use]
-extern crate log;
+// 1. New user joins
+//    - look for Message.kind == NewChatMembers
+//    - will give potentially a LIST of new members, need to process all
+// 2. Strip user of posting rights
+// 3. Print CHALLENGE_MESSAGE
+// 4. If correct button not pressed withing CHALLENGE_TIMEOUT_SEC, ban user.
+// 4a. If KEEP_JOIN_MSG_ON_FAIL is not allowed, delete messages.
+// 4b. If PRINT_FAIL is allowed, post failure message.
+// 5. Otherwise, restore posting rights (Restore to the group's default!)
+// 5a. If allowed, print WELCOME message.
 
-use actix::prelude::*;
-use actix_telegram::{methods::GetMe, App, TelegramBot};
-use chrono::Duration;
-use dotenv::dotenv;
-use futures::future::Future;
-use std::env;
+use {
+    dotenv::dotenv,
+    teloxide::{prelude::*, Bot},
+    tokio_stream::wrappers::UnboundedReceiverStream,
+};
 
-struct Messages {
-    pub button_text: String,
-    pub button_not_for_you: String,
-    pub challenge_message: String,
-    pub challenge_timeout: Duration,
-    pub success_message: String,
-    pub fail_message: String,
-    pub print_success: bool,
-    pub print_fail: bool,
-    pub keep_join_msg_on_fail: bool,
-}
+mod actor_messages;
+mod bot_messages;
+mod challenge;
+mod dispatcher;
+mod interrogator;
+mod timer;
 
-impl Messages {
-    pub fn from_env() -> Self {
-        Messages {
-            button_text: env::var("BTN_TEXT").unwrap_or("I am not a spammer!".into()),
-            button_not_for_you: env::var("BTN_NOT_FOR_YOU").unwrap_or("This button is not for you.".into()),
-            challenge_message: env::var("CHALLENGE_MESSAGE").unwrap_or("This is spam protection. You have {} seconds to press the button or you will be banned!".into()),
-            challenge_timeout: Duration::seconds(env::var("CHALLENGE_TIMEOUT_SEC").unwrap_or("30".into()).parse::<i64>().expect("Couldn't parse CHALLENGE_TIMEOUT_SEC")),
-            success_message: env::var("SUCCESS_MESSAGE").unwrap_or("Welcome!".into()),
-            fail_message: env::var("FAIL_MESSAGE").unwrap_or("User didn't pass the validation and was banned.".into()),
-            print_success: env::var("PRINT_SUCCESS").unwrap_or("true".into()).parse::<bool>().expect("Couldn't parse PRINT_SUCCESS"),
-            print_fail: env::var("PRINT_FAIL").unwrap_or("false".into()).parse::<bool>().expect("Couldn't parse PRINT_FAIL"),
-            keep_join_msg_on_fail: env::var("KEEP_JOIN_MSG_ON_FAIL").unwrap_or("false".into()).parse::<bool>().expect("Couldn't parse KEEP_JOIN_MSG_ON_FAIL"),
-        }
-    }
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     dotenv().ok();
     setup_logging().expect("failed to initialize logging");
 
-    let config = Messages::from_env();
-    let token = env::var("TELEGRAM_BOT_TOKEN").expect("TELEGRAM_BOT_TOKEN must be set");
-    let timeout = 30_u16;
-    let sys = System::new("runner");
-    let challenge_app = App::new(|msg, _telegram_api| {
-        info!("{:?}", msg);
-        Ok(())
-    });
+    run().await;
+}
 
-    let _bot = TelegramBot::new(token, timeout, vec![challenge_app]).start();
-    sys.run();
+async fn run() {
+    log::info!("Starting bot...");
+
+    let timeout = 30_u16;
+    let messages = bot_messages::Messages::from_env();
+
+    let bot = Bot::from_env().auto_send();
+
+    Dispatcher::new(bot)
+        .messages_handler(move |rx: DispatcherHandlerRx<AutoSend<Bot>, Message>| {
+            UnboundedReceiverStream::new(rx)
+                .for_each_concurrent(None, move |message| handle_message(message))
+        })
+        .chat_members_handler(
+            move |rx: DispatcherHandlerRx<AutoSend<Bot>, ChatMemberUpdated>| {
+                UnboundedReceiverStream::new(rx)
+                    .for_each_concurrent(None, move |message| handle_chat_members(message))
+            },
+        )
+        .setup_ctrlc_handler()
+        .dispatch()
+        .await;
+}
+
+async fn handle_message(cx: UpdateWithCx<AutoSend<Bot>, Message>) {
+    log::info!("Handling regular message");
+    // match cx.update.text().map(ToOwned::to_owned) {
+    // None => {
+    //     cx.answer("Send me a text message.").await?;
+    //     next(dialogue)
+    // }
+    // Some(ans) => dialogue.react(cx, ans).await,
+    // }
+}
+
+async fn handle_chat_members(cx: UpdateWithCx<AutoSend<Bot>, ChatMemberUpdated>) {
+    log::info!("Handling chat member update");
 }
 
 fn setup_logging() -> Result<(), fern::InitError> {
@@ -78,7 +94,8 @@ fn setup_logging() -> Result<(), fern::InitError> {
                 level = colors_level.color(record.level()),
                 message = message,
             ))
-        }).level(log::LevelFilter::Info)
+        })
+        .level(log::LevelFilter::Info)
         .chain(std::io::stdout());
 
     let file_config = fern::Dispatch::new()
@@ -90,7 +107,8 @@ fn setup_logging() -> Result<(), fern::InitError> {
                 record.level(),
                 message
             ))
-        }).level(log::LevelFilter::Trace)
+        })
+        .level(log::LevelFilter::Trace)
         .chain(
             std::fs::OpenOptions::new()
                 .write(true)
